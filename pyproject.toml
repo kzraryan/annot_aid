@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "annot_aid"
+version = "0.0.1"
+description = "Streamlit app for biomarker to LOINC annotation with DB-agnostic adapters"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+keywords = ["LOINC", "biomarker", "annotation", "streamlit"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "pandas>=2.2.0",
+  "streamlit>=1.36.0",
+]
+
+[project.optional-dependencies]
+duckdb = ["duckdb>=1.0.0"]
+snowflake = ["snowflake-connector-python>=3.12.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-q"
+pythonpath = ["src"]

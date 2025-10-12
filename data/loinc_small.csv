@@ -1,0 +1,6 @@
+loinc_num,long_name,component,property,time,system,scale,method,class,status,deprecated
+4548-4,Hemoglobin A1c/Hemoglobin.total in Blood,Glucose/Hemoglobin,MCnc,Pt,Bld,%,HPLC,CHEM,Active,False
+17856-6,Creatinine [Mass/volume] in Serum or Plasma,Creatinine,MCnc,Pt,Ser/Plas,mg/dL,Enzymatic,CHEM,Active,False
+30522-7,C reactive protein [Mass/volume] in Serum or Plasma,C reactive protein,MCnc,Pt,Ser/Plas,mg/L,Immunoassay,CHEM,Active,False
+6299-2,Hemoglobin A1c/Hemoglobin.total in Blood by IFCC protocol,Glucose/Hemoglobin,MCnc,Pt,Bld,mmol/mol,IFCC,CHEM,Active,False
+34535-5,Deprecated example term,Example,MCnc,Pt,Ser/Plas,arb,U,Obs,Deprecated,True
