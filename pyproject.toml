@@ -8,18 +8,19 @@ version = "0.0.1"
 description = "Streamlit app for biomarker to LOINC annotation with DB-agnostic adapters"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {file = "LICENSE"}
+license = { file = "LICENSE" }
 keywords = ["LOINC", "biomarker", "annotation", "streamlit"]
 classifiers = [
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.11",
-  "License :: OSI Approved :: MIT License",
-  "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
 ]
 dependencies = [
-  "pandas>=2.2.0",
-  "streamlit>=1.36.0",
+    "pandas>=2.2.0",
+    "streamlit>=1.36.0",
+    "duckdb>=1.0.0"
 ]
 
 [project.optional-dependencies]

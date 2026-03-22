@@ -12,13 +12,13 @@ def test_file_adapter_loads_data(tmp_path):
     assert not bio.empty
     assert not loinc.empty
     assert {"id", "description"}.issubset(bio.columns)
-    assert {"loinc_num", "long_name"}.issubset(loinc.columns)
+    assert {"loinc_num", "long_common_name"}.issubset(loinc.columns)
 
 
 def test_text_filtering():
     fa = FileAdapter(root=".")
     df = fa.get_loinc_candidates(FilterParams(text="Creatinine"))
-    assert (df["long_name"].str.contains("Creatinine")).any()
+    assert (df["long_common_name"].str.contains("Creatinine")).any()
 
 
 def test_axis_filtering_component():

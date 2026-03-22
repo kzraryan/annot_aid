@@ -2,17 +2,13 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Optional
 import pandas as pd
 
-AXIS_COLS = {
-    "Component": "component",
-    "Property": "property",
-    "Time": "time",
-    "System": "system",
-    "Scale": "scale",
-    "Method": "method",
-}
+from ..config import AXES
+
+# Mapping from axis display names to dataframe column names
+AXIS_COLS = {axis: axis.lower() for axis in AXES}
 
 SEARCH_COLS = [
-    "long_name",
+    "long_common_name",
     "component",
     "system",
     "property",

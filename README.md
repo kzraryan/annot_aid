@@ -9,7 +9,7 @@ annot_aid aims to make data annotation simple and efficient, with humans guiding
 - Language: Python 3.11+
 - UI: Streamlit
 - Data: pandas DataFrame over small demo CSVs in data/
-- DB adapters: file (demo), optional duckdb and snowflake (lazy imports)
+- DB adapters: file (demo), duckdb (physical DB file), optional snowflake (lazy imports)
 - Packaging: pyproject.toml (setuptools)
 
 ## Requirements
@@ -32,14 +32,44 @@ Install dependencies:
    - python -m pip install -e .  # base deps (pandas, streamlit)
    - Optional: python -m pip install -e .[duckdb,snowflake]
 
+## Configuration
+- Project-level constants are centralized in config.toml at the repository root.
+- Axes: set annot_aid.axes to control the canonical list and order of LOINC axes shown in the UI and used in filtering.
+
+Example config.toml:
+
+```
+[annot_aid]
+axes = [
+  "Component",
+  "Property",
+  "Time",
+  "System",
+  "Scale",
+  "Method",
+]
+```
+
+If config.toml is missing or malformed, safe defaults are used.
+
 ## Run
 - Streamlit app (development):
   - python -m streamlit run app.py
   - Use the sidebar to navigate to Overview, Axis Editor, and LOINC Matcher.
-  - Demo data comes from data/biomarkers.csv and data/loinc_small.csv.
+
+- Database (DuckDB)
+  - By default, the app prefers a DuckDB database at data/annot_aid.duckdb if present.
+  - You can override the path via environment variable ANNOT_AID_DUCKDB_PATH.
+    - Example (PowerShell): $Env:ANNOT_AID_DUCKDB_PATH = "C:\\path\\to\\your.db"
+  - If no valid DuckDB is found, the app falls back to the demo file adapter (CSV-based).
 
 - Adapter selection
-  - The app defaults to the file adapter. Future adapters can be selected via URL query param db=file|duckdb|snowflake.
+  - You can force the adapter via URL query param db=file|duckdb|snowflake.
+    - Examples:
+      - http://localhost:8501/?db=duckdb
+      - http://localhost:8501/?db=file
+  - When not specified, the app auto-selects DuckDB if data/annot_aid.duckdb exists, otherwise uses the file adapter.
+  - The DuckDB adapter reads/writes only to the physical DB file; no CSV fallback at runtime.
 
 ## Scripts
 No scripts are currently defined.
@@ -47,9 +77,10 @@ No scripts are currently defined.
 - TODO: Document available scripts or task runner commands (e.g., make, npm scripts, rye/poetry/pipenv tasks, justfile, invoke, fabric, tox, hatch, cargo, etc.).
 
 ## Environment Variables
-No environment variables are currently defined.
+- ANNOT_AID_USER_ID (optional): user identifier recorded in DuckDB audit columns when saving axes/LOINC selections. Defaults to "demo" if not set.
 
-- TODO: List and describe required env vars here (names, examples, and whether they are mandatory or optional). Consider providing an example .env file.
+Example (PowerShell):
+- $Env:ANNOT_AID_USER_ID = "alice"
 
 ## Tests
 - Install pytest (in venv or user-site):

@@ -13,7 +13,7 @@ Stack and layout
   - src/annot_aid/model/filtering.py
   - src/annot_aid/controller/state.py (Streamlit session state helpers)
   - app.py and pages/{1_Overview.py,2_Axis_Editor.py,3_LOINC_Matcher.py}
-  - data/{biomarkers.csv,loinc_small.csv}
+  - data/{biomarkers.csv,loinc.csv}
   - tests/{test_file_adapter.py,test_filtering.py}
 
 Run (Windows-friendly)

@@ -3,8 +3,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Protocol, Tuple
 import pandas as pd
 
-
-AXES = ["Component", "Property", "Time", "System", "Scale", "Method"]
+from ..config import AXES
 
 
 @dataclass(frozen=True)
@@ -16,14 +15,12 @@ class FilterParams:
 
 class DBAdapter(Protocol):
     """Abstract DB adapter interface to keep app database-agnostic.
-
-    Implementations must avoid unnecessary full copies of tables.
     """
 
     def get_loinc_candidates(self, params: FilterParams | None = None) -> pd.DataFrame:
         """Return LOINC candidates as a DataFrame with standard columns.
 
-        Required columns: loinc_num, long_name, component, property, time, system, scale, method, class, status, deprecated
+        Required columns: loinc_num, long_common_name, component, property, time, system, scale, method, class, status, deprecated
         """
         ...
 
@@ -45,7 +42,7 @@ class DBAdapter(Protocol):
         ...
 
     def load_saved_axes(self, biomarker_id: str) -> Dict[str, List[str]]:
-        """Load persisted axes for biomarker_id (may be empty)."""
+        """Load persisted axes for biomarker_id."""
         ...
 
     def load_saved_loincs(self, biomarker_id: str) -> Tuple[List[str], Dict[str, int], str]:

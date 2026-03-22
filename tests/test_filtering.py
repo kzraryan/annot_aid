@@ -5,9 +5,9 @@ from annot_aid.model.filtering import apply_filters
 
 def sample_df():
     return pd.DataFrame([
-        {"loinc_num": "1", "long_name": "Alpha", "component": "A", "property": "P1", "time": "Pt", "system": "Sys1", "scale": "Qn", "method": "M1", "class": "C", "status": "Active", "deprecated": False},
-        {"loinc_num": "2", "long_name": "Beta", "component": "B", "property": "P2", "time": "Pt", "system": "Sys2", "scale": "Qn", "method": "M2", "class": "C", "status": "Active", "deprecated": True},
-        {"loinc_num": "3", "long_name": "Gamma", "component": "A", "property": "P2", "time": "24H", "system": "Sys1", "scale": "Ord", "method": "M1", "class": "D", "status": "Active", "deprecated": False},
+        {"loinc_num": "1", "long_common_name": "Alpha", "component": "A", "property": "P1", "time": "Pt", "system": "Sys1", "scale": "Qn", "method": "M1", "class": "C", "status": "Active", "deprecated": False},
+        {"loinc_num": "2", "long_common_name": "Beta", "component": "B", "property": "P2", "time": "Pt", "system": "Sys2", "scale": "Qn", "method": "M2", "class": "C", "status": "Active", "deprecated": True},
+        {"loinc_num": "3", "long_common_name": "Gamma", "component": "A", "property": "P2", "time": "24H", "system": "Sys1", "scale": "Ord", "method": "M1", "class": "D", "status": "Active", "deprecated": False},
     ])
 
 

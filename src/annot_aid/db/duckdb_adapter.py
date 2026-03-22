@@ -1,218 +1,186 @@
 from __future__ import annotations
-from typing import Iterable, Optional, Sequence, Tuple, List
+from typing import Iterable, Optional, Tuple, List, Dict
 import os
-
 import pandas as pd
+import duckdb
 
 from .base import FilterParams, normalize_axes_dict
+from annot_aid.config import get_config
 
 
 class DuckDBAdapter:
-    """DuckDB-backed adapter using real duckdb SQL where available.
+    """DuckDB adapter using schema MAPPING; dynamic LOINC axes from config; minimal surface."""
 
-    - Lazily imports duckdb to avoid hard dependency for tests.
-    - If duckdb is unavailable, falls back to pandas CSV filtering (kept minimal).
-    - For demo, loads CSVs into an in-memory DuckDB and pushes filters server-side.
-    """
+    def __init__(self, db_path: Optional[str] = None, schema: str = "MAPPING", user_id: Optional[str] = None):
+        cfg = get_config() or {}
+        self._db_path = db_path or cfg.get("ANNOT_AID_DUCKDB_PATH") or os.path.join("data", "annot_aid.duckdb")
+        self._schema = schema
+        self._conn: Optional[duckdb.DuckDBPyConnection] = None
+        self._user_id = user_id or os.getenv("ANNOT_AID_USER", "default")
 
-    def __init__(self, loinc_path: str = "data/loinc_small.csv", bio_path: str = "data/biomarkers.csv", db_path: Optional[str] = None):
-        self._loinc_path = loinc_path
-        self._bio_path = bio_path
-        self._db_path = db_path  # if provided, persists a duckdb database file
-        self._conn = None
-        self._fallback_loinc: Optional[pd.DataFrame] = None
-        self._fallback_bio: Optional[pd.DataFrame] = None
-        self._demo_initialized = False
+        # Axes from config (list or dict)
+        loinc_axes_cfg = cfg.get("LOINC_AXES") or ["COMPONENT","PROPERTY","TIME_ASPCT","SYSTEM","SCALE_TYP","METHOD_TYP"]
+        if isinstance(loinc_axes_cfg, dict):
+            self._axis_labels: List[str] = list(loinc_axes_cfg.keys())
+            self._axis_to_col: Dict[str, str] = dict(loinc_axes_cfg)
+        else:
+            self._axis_labels = list(loinc_axes_cfg)
+            self._axis_to_col = {a: a for a in self._axis_labels}
 
-    # --- Connection and schema setup ---
-    def _ensure_conn(self):
+        self._text_fields: List[str] = list(cfg.get("LOINC_TEXT_FIELDS") or [])
+        self._select_base: List[str] = list(cfg.get("LOINC_SELECT_BASE") or ["class"])
+        self._long_name_col: str = str(cfg.get("LOINC_LONG_NAME_COL", "long_common_name"))
+
+    # ---------------- Connection ----------------
+    def _ensure_conn(self) -> None:
         if self._conn is not None:
             return
-        try:
-            import duckdb  # type: ignore
-        except Exception as e:
-            self._conn = None
-            return
-        # Connect (in-memory by default)
-        self._conn = duckdb.connect(self._db_path or ":memory:")
-        # Create or replace views from CSVs
-        self._conn.execute("CREATE OR REPLACE VIEW loinc AS SELECT * FROM read_csv_auto(?, HEADER=TRUE)", [self._loinc_path])
-        self._conn.execute("CREATE OR REPLACE VIEW biomarkers AS SELECT * FROM read_csv_auto(?, HEADER=TRUE)", [self._bio_path])
-        # Create persistence tables if not exist
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS biomarker_axes (
-                biomarker_id VARCHAR,
-                axis VARCHAR,
-                value VARCHAR
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS biomarker_loincs (
-                biomarker_id VARCHAR,
-                loinc_num VARCHAR,
-                confidence INTEGER,
-                rationale VARCHAR
-            )
-            """
-        )
-        # Seed small demo rows once (idempotent)
-        if not self._demo_initialized:
-            self._conn.execute("INSERT INTO biomarker_axes BY NAME SELECT * FROM (SELECT '1' AS biomarker_id, 'Component' AS axis, component AS value FROM loinc LIMIT 1) ON CONFLICT DO NOTHING")
-            # Insert two demo loincs with confidence 100 for biomarker 1 if none exist
-            self._conn.execute(
-                """
-                INSERT INTO biomarker_loincs
-                SELECT '1' AS biomarker_id, loinc_num::VARCHAR, 100 AS confidence, 'Demo rationale' AS rationale
-                FROM loinc
-                WHERE loinc_num IN (
-                    SELECT loinc_num FROM loinc ORDER BY loinc_num LIMIT 2
-                )
-                AND NOT EXISTS (
-                    SELECT 1 FROM biomarker_loincs b WHERE b.biomarker_id='1'
-                )
-                """
-            )
-            self._demo_initialized = True
+        self._conn = duckdb.connect(self._db_path)
+        self._conn.execute(f"USE {self._schema}")
+        required = {"LOINC","BIOMARKERS","BIOMARKER_AXES_SEL","BIOMARKER_LOINCS_SEL"}
+        q = """SELECT table_name FROM information_schema.tables WHERE table_schema = ?"""
+        have = set(self._conn.execute(q, [self._schema]).fetch_df()["table_name"].tolist())
+        miss = sorted(list(required - have))
+        if miss:
+            raise RuntimeError(f"[DuckDBAdapter] Missing tables in {self._schema}: {', '.join(miss)}")
 
-    # --- Fallback pandas loaders ---
-    @property
-    def _loinc_df(self) -> pd.DataFrame:
-        if self._fallback_loinc is None:
-            self._fallback_loinc = pd.read_csv(self._loinc_path)
-        return self._fallback_loinc
-
-    @property
-    def _bio_df(self) -> pd.DataFrame:
-        if self._fallback_bio is None:
-            self._fallback_bio = pd.read_csv(self._bio_path)
-        return self._fallback_bio
-
-    # --- Query building helpers ---
+    # ---------------- WHERE builder ----------------
     def _build_loinc_where(self, params: Optional[FilterParams]) -> Tuple[str, List]:
+        where: List[str] = []
+        args: List = []
         if not params:
             return "", []
-        axes = normalize_axes_dict(params.axes)
-        where = []
-        args: List = []
-        # Text search across multiple columns
+
+        # Text search
         if params.text:
             q = f"%{params.text.strip()}%"
-            text_cols = [
-                "long_name", "component", "property", "time", "system", "scale", "method", "loinc_num",
-            ]
-            ors = " OR ".join([f"{c} ILIKE ?" for c in text_cols])
+            cols = self._text_fields or [self._long_name_col, *self._axis_to_col.values(), "loinc_num", "class"]
+            ors = " OR ".join([f"{c} ILIKE ?" for c in cols])
             where.append(f"({ors})")
-            args.extend([q] * len(text_cols))
-        # Axis filters
-        for col, values in axes.items():
-            if values:
-                placeholders = ",".join(["?"] * len(values))
-                where.append(f"{col.lower()} IN ({placeholders})")
-                args.extend(values)
-        # Deprecated toggle
-        if not params.include_deprecated:
-            where.append("COALESCE(deprecated, false) = false")
-        if not where:
-            return "", []
-        return " WHERE " + " AND ".join(where), args
+            args.extend([q] * len(cols))
 
-    # --- Public API ---
+        # Axis filters
+        axes = normalize_axes_dict(params.axes)
+        for label, values in (axes or {}).items():
+            col = self._axis_to_col.get(str(label))
+            if col and values:
+                ph = ",".join(["?"] * len(values))
+                where.append(f"{col} IN ({ph})")
+                args.extend(list(values))
+
+
+        return (" WHERE " + " AND ".join(where), args) if where else ("", [])
+
+    # ---------------- Public APIs ----------------
     def get_loinc_candidates(self, params: Optional[FilterParams] = None) -> pd.DataFrame:
         self._ensure_conn()
-        if self._conn is None:
-            # Fallback: minimal pandas filtering (no heavy copies)
-            df = self._loinc_df
-            if params is None:
-                return df
-            # Apply simple boolean masks equivalent to server-side filters
-            from ..model.filtering import apply_filters
-            return apply_filters(df, text=params.text, axes=normalize_axes_dict(params.axes), include_deprecated=params.include_deprecated)
         where_sql, args = self._build_loinc_where(params)
-        sql = (
-            "SELECT loinc_num, long_name, component, property, time, system, scale, method, class, status, deprecated "
-            "FROM loinc" + where_sql + " ORDER BY class, component, long_name"
-        )
-        res = self._conn.execute(sql, args).fetch_df()
-        return res
+        # SELECT = loinc_num, long name, axes, extras
+        cols = ["loinc_num", self._long_name_col, *self._axis_to_col.values(), *self._select_base]
+        sql = f"SELECT {', '.join(cols)} FROM loinc {where_sql} ORDER BY loinc_num"
+        return self._conn.execute(sql, args).fetch_df()
 
-    # --- Persistence API ---
-    def upsert_axes(self, biomarker_id: str, axes: dict[str, list[str]]) -> None:
+    def get_loinc_by_nums(self, nums: Iterable[str]) -> pd.DataFrame:
         self._ensure_conn()
-        if self._conn is None:
-            # fallback: no duckdb, do nothing (file adapter should handle persistence in file mode)
-            return
-        # delete and insert
-        self._conn.execute("DELETE FROM biomarker_axes WHERE biomarker_id = ?", [str(biomarker_id)])
-        rows = []
-        from .base import AXES as _AXES
-        for axis, values in normalize_axes_dict(axes).items():
-            for v in values:
-                rows.append((str(biomarker_id), axis, str(v)))
-        if rows:
-            self._conn.execute("INSERT INTO biomarker_axes (biomarker_id, axis, value) VALUES (?, ?, ?)", rows)
+        s = [str(x) for x in (nums or [])]
+        if not s:
+            return self._conn.execute("SELECT * FROM loinc WHERE 1=0").fetch_df()
+        cols = ["loinc_num", self._long_name_col, *self._axis_to_col.values(), *self._select_base]
+        ph = ",".join(["?"] * len(s))
+        sql = f"SELECT {', '.join(cols)} FROM loinc WHERE loinc_num IN ({ph})"
+        return self._conn.execute(sql, s).fetch_df()
 
-    def upsert_loincs(self, biomarker_id: str, loinc_conf: dict[str, int], rationale: str) -> None:
+    def get_biomarker_queue(self) -> pd.DataFrame:
         self._ensure_conn()
-        if self._conn is None:
-            return
-        self._conn.execute("DELETE FROM biomarker_loincs WHERE biomarker_id = ?", [str(biomarker_id)])
-        rows = []
-        for ln, conf in loinc_conf.items():
-            c = int(max(1, min(100, int(conf)))) if pd.notna(conf) else 100
-            rows.append((str(biomarker_id), str(ln), c, str(rationale or "")))
-        if rows:
-            self._conn.execute("INSERT INTO biomarker_loincs (biomarker_id, loinc_num, confidence, rationale) VALUES (?, ?, ?, ?)", rows)
+        sql = "SELECT biomarker_id, biomarker, organ, level, sublevel, test_method FROM biomarkers ORDER BY biomarker"
+        return self._conn.execute(sql).fetch_df()
 
-    def load_saved_axes(self, biomarker_id: str) -> dict[str, list[str]]:
+    # ---------------- Persistence: Axes ----------------
+    def upsert_axes(self, biomarker_id: str, axes: Dict[str, List[str]]) -> None:
         self._ensure_conn()
-        if self._conn is None:
-            return {k: [] for k in ["Component", "Property", "Time", "System", "Scale", "Method"]}
-        df = self._conn.execute("SELECT axis, value FROM biomarker_axes WHERE biomarker_id = ?", [str(biomarker_id)]).fetch_df()
-        out: dict[str, list[str]] = {k: [] for k in ["Component", "Property", "Time", "System", "Scale", "Method"]}
-        if df.empty:
-            return out
+        uid = self._user_id
+        desired = {(str(k), str(v)) for k, vs in normalize_axes_dict(axes).items() for v in vs}
+
+        cur = self._conn.execute(
+            "SELECT axis, axis_value FROM biomarker_axes_sel WHERE biomarker_id = ? AND user_id = ? AND active_ind = 1",
+            [str(biomarker_id), uid],
+        ).fetch_df()
+        existing = {(str(r.axis), str(r.axis_value)) for r in cur.itertuples(index=False)}
+
+        to_add = sorted(desired - existing)
+        to_remove = sorted(existing - desired)
+
+        if to_remove:
+            self._conn.executemany(
+                "UPDATE biomarker_axes_sel SET active_ind = 0, updt_dt_tm = CURRENT_TIMESTAMP "
+                "WHERE biomarker_id = ? AND user_id = ? AND axis = ? AND axis_value = ? AND active_ind = 1",
+                [(str(biomarker_id), uid, a, v) for a, v in to_remove],
+            )
+        if to_add:
+            self._conn.executemany(
+                "INSERT INTO biomarker_axes_sel (biomarker_id, axis, axis_value, user_id, updt_dt_tm, active_ind) "
+                "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 1)",
+                [(str(biomarker_id), a, v, uid) for a, v in to_add],
+            )
+
+    # ---------------- Persistence: LOINCs ----------------
+    def upsert_loincs(self, biomarker_id: str, loinc_conf: Dict[str, int], rationale: str) -> None:
+        self._ensure_conn()
+        uid = self._user_id
+        desired = {str(k) for k in (loinc_conf or {}).keys()}
+
+        cur = self._conn.execute(
+            "SELECT loinc_num FROM biomarker_loincs_sel WHERE biomarker_id = ? AND user_id = ? AND active_ind = 1",
+            [str(biomarker_id), uid],
+        ).fetch_df()
+        existing = set(cur["loinc_num"].astype(str).tolist())
+
+        to_add = sorted(desired - existing)
+        to_remove = sorted(existing - desired)
+
+        if to_remove:
+            self._conn.executemany(
+                "UPDATE biomarker_loincs_sel SET active_ind = 0, updt_dt_tm = CURRENT_TIMESTAMP "
+                "WHERE biomarker_id = ? AND user_id = ? AND loinc_num = ? AND active_ind = 1",
+                [(str(biomarker_id), uid, ln) for ln in to_remove],
+            )
+        if to_add:
+            rows = []
+            for ln in to_add:
+                c = loinc_conf.get(ln, 100)
+                conf = int(max(1, min(100, int(c)))) if pd.notna(c) else 100
+                rows.append((str(biomarker_id), ln, conf, str(rationale or ""), uid))
+            self._conn.executemany(
+                "INSERT INTO biomarker_loincs_sel (biomarker_id, loinc_num, confidence, rationale, user_id, updt_dt_tm, active_ind) "
+                "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1)",
+                rows,
+            )
+
+    # ---------------- Load selections ----------------
+    def load_saved_axes(self, biomarker_id: str) -> Dict[str, List[str]]:
+        self._ensure_conn()
+        uid = self._user_id
+        df = self._conn.execute(
+            "SELECT axis, axis_value FROM biomarker_axes_sel WHERE biomarker_id = ? AND user_id = ? AND active_ind = 1",
+            [str(biomarker_id), uid],
+        ).fetch_df()
+        out: Dict[str, List[str]] = {k: [] for k in self._axis_labels}
         for axis, grp in df.groupby("axis"):
-            out[str(axis)] = grp["value"].dropna().astype(str).tolist()
+            out[str(axis)] = grp["axis_value"].dropna().astype(str).tolist()
         return out
 
     def load_saved_loincs(self, biomarker_id: str):
         self._ensure_conn()
-        if self._conn is None:
-            return [], {}, ""
-        df = self._conn.execute("SELECT loinc_num, confidence, rationale FROM biomarker_loincs WHERE biomarker_id = ?", [str(biomarker_id)]).fetch_df()
+        uid = self._user_id
+        df = self._conn.execute(
+            "SELECT loinc_num, confidence, rationale, updt_dt_tm FROM biomarker_loincs_sel "
+            "WHERE biomarker_id = ? AND user_id = ? AND active_ind = 1",
+            [str(biomarker_id), uid],
+        ).fetch_df()
         if df.empty:
             return [], {}, ""
         loincs = df["loinc_num"].astype(str).tolist()
         conf = {str(r.loinc_num): int(r.confidence) for r in df.itertuples(index=False)}
-        rationale = df["rationale"].dropna().astype(str).head(1).tolist()
-        return loincs, conf, (rationale[0] if rationale else "")
-
-    def get_biomarker_queue(self) -> pd.DataFrame:
-        self._ensure_conn()
-        if self._conn is None:
-            return self._bio_df
-        sql = "SELECT id, description FROM biomarkers ORDER BY id"
-        return self._conn.execute(sql).fetch_df()
-
-    def get_loinc_by_nums(self, nums: Iterable[str]) -> pd.DataFrame:
-        s = [str(x) for x in nums]
-        if not s:
-            # Fast-empty
-            self._ensure_conn()
-            if self._conn is None:
-                return self._loinc_df.iloc[0:0]
-            return self._conn.execute(
-                "SELECT loinc_num, long_name, component, property, time, system, scale, method, class, status, deprecated FROM loinc WHERE 1=0"
-            ).fetch_df()
-        self._ensure_conn()
-        if self._conn is None:
-            return self._loinc_df[self._loinc_df["loinc_num"].astype(str).isin(set(s))]
-        placeholders = ",".join(["?"] * len(s))
-        sql = (
-            "SELECT loinc_num, long_name, component, property, time, system, scale, method, class, status, deprecated FROM loinc "
-            f"WHERE loinc_num IN ({placeholders})"
-        )
-        return self._conn.execute(sql, s).fetch_df()
+        df = df.sort_values("updt_dt_tm", ascending=False)
+        rationale_vals = df["rationale"].dropna().astype(str).tolist()
+        return loincs, conf, (rationale_vals[0] if rationale_vals else "")

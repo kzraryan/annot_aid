@@ -19,14 +19,14 @@ class SnowflakeAdapter:
         SNOWFLAKE_DATABASE, SNOWFLAKE_SCHEMA, optional SNOWFLAKE_ROLE
 
     Table names (can be views): loinc, biomarkers. Override via initializer.
-    Columns required for loinc: loinc_num, long_name, component, property, time, system, scale, method, class, status, deprecated
+    Columns required for loinc: loinc_num, long_common_name, component, property, time, system, scale, method, class, status, deprecated
     """
 
     def __init__(
         self,
         loinc_table: str = "LOINC",
         biomarkers_table: str = "BIOMARKERS",
-        loinc_path: str = "data/loinc_small.csv",
+        loinc_path: str = "data/loinc.csv",
         bio_path: str = "data/biomarkers.csv",
         conn_params: Optional[Dict[str, str]] = None,
     ):
@@ -96,7 +96,7 @@ class SnowflakeAdapter:
         if params.text:
             q = f"%{params.text.strip()}%"
             text_cols = [
-                "long_name", "component", "property", "time", "system", "scale", "method", "loinc_num",
+                "long_common_name", "component", "property", "time", "system", "scale", "method", "loinc_num",
             ]
             ors = " OR ".join([f"{c} ILIKE ?" for c in text_cols])
             where.append(f"({ors})")
@@ -123,9 +123,9 @@ class SnowflakeAdapter:
             return apply_filters(self._loinc_df, text=params.text, axes=normalize_axes_dict(params.axes), include_deprecated=params.include_deprecated)
         where_sql, args = self._build_loinc_where(params)
         sql = (
-            f"SELECT loinc_num, long_name, component, property, time, system, scale, method, class, status, deprecated FROM {self._loinc_table}" +
+            f"SELECT loinc_num, long_common_name, component, property, time, system, scale, method, class, status, deprecated FROM {self._loinc_table}" +
             where_sql +
-            " ORDER BY class, component, long_name"
+            " ORDER BY class, component, long_common_name"
         )
         cur = self._conn.cursor()
         try:
@@ -165,13 +165,13 @@ class SnowflakeAdapter:
             if self._conn is None:
                 return self._loinc_df.iloc[0:0]
             # Return empty result with correct columns
-            return pd.DataFrame(columns=["loinc_num","long_name","component","property","time","system","scale","method","class","status","deprecated"])[:0]
+            return pd.DataFrame(columns=["loinc_num","long_common_name","component","property","time","system","scale","method","class","status","deprecated"])[:0]
         self._ensure_conn()
         if self._conn is None:
             return self._loinc_df[self._loinc_df["loinc_num"].astype(str).isin(set(s))]
         placeholders = ",".join(["?"] * len(s))
         sql = (
-            f"SELECT loinc_num, long_name, component, property, time, system, scale, method, class, status, deprecated FROM {self._loinc_table} "
+            f"SELECT loinc_num, long_common_name, component, property, time, system, scale, method, class, status, deprecated FROM {self._loinc_table} "
             f"WHERE loinc_num IN ({placeholders})"
         )
         cur = self._conn.cursor()
