@@ -1,0 +1,14 @@
+[annot_aid]
+# Canonical list of LOINC axes (order matters)
+loinc_axes = [
+  "COMPONENT",
+  "PROPERTY",
+  "TIME_ASPCT",
+  "SYSTEM",
+  "SCALE_TYP",
+  "METHOD_TYP",
+    "CLASS"
+
+]
+
+ANNOT_AID_DUCKDB_PATH = 'data/annot_aid.duckdb'
